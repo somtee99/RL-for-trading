@@ -1,20 +1,17 @@
 #!pip install tensorflow gym numpy pandas matplotlib seaborn stable-baselines3
 
-
 import pandas as pd
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, confusion_matrix, accuracy_score, classification_report
-from statsmodels.tsa.arima.model import ARIMA
+from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, BatchNormalization, GRU
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.optimizers import Adam
-from sklearn.utils.class_weight import compute_class_weight
-from sklearn.multioutput import MultiOutputRegressor
+import joblib
+import gym
+from gym import spaces
 
 def load_and_resample_data(file_path):
     # Load the data from CSV
@@ -67,70 +64,81 @@ input_shape = (X.shape[1], 1)
 lstm_model = build_lstm_model(input_shape)
 lstm_model.summary()
 
-import gym
-from gym import spaces
-
 class ForexTradingEnv(gym.Env):
-    def __init__(self, data, model, window_size=60, initial_balance=10000):
+    def __init__(self, data, model, window_size=60, initial_balance=50):
         super(ForexTradingEnv, self).__init__()
-        
+
         self.data = data
         self.model = model
         self.window_size = window_size
-        self.current_step = self.window_size
-        self.done = False
         self.initial_balance = initial_balance
-        self.balance = initial_balance  # Track the balance
-        self.position = 0  # Track current position (1 = long, -1 = short, 0 = no position)
-        
-        # Define action space: 0 = Hold, 1 = Buy, 2 = Sell
-        self.action_space = spaces.Discrete(3)
-        
-        # Define observation space: state consists of 60 previous close prices (window_size)
+
+        self.action_space = spaces.Discrete(3)  # 0 = Hold, 1 = Buy, 2 = Sell
         self.observation_space = spaces.Box(low=0, high=1, shape=(self.window_size, 1), dtype=np.float32)
-        
-        # List to track performance (balance over time)
-        self.balance_history = []
+
+        self.reset()
 
     def reset(self):
         self.current_step = self.window_size
         self.balance = self.initial_balance
-        self.position = 0
+        self.position = 0           # 0 = Flat, 1 = Long, -1 = Short
+        self.entry_price = None
         self.done = False
-        self.balance_history = [self.balance]  # Track balance from the start
-        return self.data[self.current_step - self.window_size: self.current_step]
-    
-    def step(self, action):
-        state = self.data[self.current_step - self.window_size: self.current_step]
-        predicted_price = self.model.predict(np.reshape(state, (1, self.window_size, 1)))[0][0]
-        current_price = self.data[self.current_step][0]  # Current close price
-        reward = 0
+        self.balance_history = [self.balance]
+        return self._get_state()
 
-        # Action: 0 = Hold, 1 = Buy, 2 = Sell
+    def _get_state(self):
+        return self.data[self.current_step - self.window_size: self.current_step]
+
+    def step(self, action):
+        state = self._get_state()
+        current_price = self.data[self.current_step][0]
+        reward = 0
+        account_blow_penalty = -1000
+
+        # Long logic
         if action == 1:  # Buy
-            if self.position == 0:  # If not holding a position
+            if self.position == 0:
                 self.position = 1
                 self.entry_price = current_price
+            elif self.position == -1:
+                # Close short
+                reward = self.entry_price - current_price
+                self.balance += reward
+                self.position = 0
+                self.entry_price = None
+
+        # Short logic
         elif action == 2:  # Sell
-            if self.position == 1:  # If holding a position (long)
+            if self.position == 0:
+                self.position = -1
+                self.entry_price = current_price
+            elif self.position == 1:
+                # Close long
                 reward = current_price - self.entry_price
                 self.balance += reward
-                self.position = 0  # Exit position
+                self.position = 0
+                self.entry_price = None
 
-        # Update balance over time (you can modify reward calculations here)
+        # Append new balance
         self.balance_history.append(self.balance)
+
+        # Account blow logic
+        if self.balance < 0:
+            reward += account_blow_penalty
+            self.done = True
+            print("❌ Account blown! Resetting environment.")
+            return state, reward, self.done, {"reason": "account_blow"}
 
         self.current_step += 1
         if self.current_step >= len(self.data) - 1:
             self.done = True
-        
+
         return state, reward, self.done, {}
 
     def render(self):
-        # Can be extended to visualize agent actions, but we'll plot balance over time
-        pass
-
-
+        # Optionally plot or print current balance and position
+        print(f"Step: {self.current_step}, Balance: {self.balance:.2f}, Position: {self.position}")
 
 #!pip install 'shimmy>=2.0'
 
@@ -172,3 +180,7 @@ plt.xlabel('Step')
 plt.ylabel('Account Balance')
 plt.legend()
 plt.show()
+
+model.save("lstm_model.h5")  # Save the model for future use
+scaler_filename = "scaler.pkl"
+joblib.dump(scaler, scaler_filename)  # Save the scaler for future use
