@@ -1,0 +1,8 @@
+{
+    "alpaca_api_key": "your-alpaca-api-key",
+    "alpaca_api_secret": "your-alpaca-api-secret",
+    "alpaca_base_url": "https://paper-api.alpaca.markets",
+    "mt5_account": 12345678,
+    "mt5_password": "your-mt5-password",
+    "mt5_server": "MetaTrader5-Server-Address"
+}

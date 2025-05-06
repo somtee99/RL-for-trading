@@ -1,0 +1,10 @@
+gym
+stable-baselines3
+tensorflow
+tensorboard
+numpy
+pandas
+matplotlib
+scikit-learn
+requests
+loguru
